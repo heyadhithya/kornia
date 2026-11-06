@@ -1,4 +1,4 @@
-name: Histogram epsilon CPU validation
+name: CPU contribution validation
 
 on:
   workflow_dispatch:
@@ -8,6 +8,21 @@ on:
         type: string
         required: true
         default: d21446901cade36115893bb77c8d89d7a60ac581
+      test_path:
+        description: Test module or node to validate
+        type: string
+        required: true
+        default: tests/enhance/test_histogram.py
+      dtypes:
+        description: CPU dtypes for the selected test module
+        type: string
+        required: true
+        default: float16,bfloat16,float32,float64
+      extra_test_path:
+        description: Optional regression node to check across all four dtypes
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -26,6 +41,9 @@ jobs:
       MKL_NUM_THREADS: "2"
       TORCH_VERSION: ${{ matrix.torch }}
       EXPECTED_FIX_SHA: ${{ inputs.patch_sha }}
+      TEST_PATH: ${{ inputs.test_path }}
+      TEST_DTYPES: ${{ inputs.dtypes }}
+      EXTRA_TEST_PATH: ${{ inputs.extra_test_path }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -60,7 +78,10 @@ jobs:
           print("CPU torch:", torch.__version__)
           print("Kornia source:", kornia.__file__)
           PY
-      - name: Test all histogram operations across four CPU dtypes
-        run: python -m pytest tests/enhance/test_histogram.py --device=cpu --dtype=float16,bfloat16,float32,float64 -q
+      - name: Test the selected module on CPU
+        run: python -m pytest "$TEST_PATH" --device=cpu "--dtype=$TEST_DTYPES" -q
+      - name: Check the additional regression across four CPU dtypes
+        if: inputs.extra_test_path != ''
+        run: python -m pytest "$EXTRA_TEST_PATH" --device=cpu --dtype=float16,bfloat16,float32,float64 -q
       - name: Build the wheel
         run: python -m pip wheel --no-deps . --wheel-dir dist
