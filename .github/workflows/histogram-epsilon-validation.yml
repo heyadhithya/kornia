@@ -1,0 +1,66 @@
+name: Histogram epsilon CPU validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      patch_sha:
+        description: Exact fix commit to test
+        type: string
+        required: true
+        default: d21446901cade36115893bb77c8d89d7a60ac581
+
+permissions:
+  contents: read
+
+jobs:
+  histogram:
+    name: CPU torch ${{ matrix.torch }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        torch: ["2.5.1", "2.9.1", "2.15.0"]
+    env:
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+      TORCH_VERSION: ${{ matrix.torch }}
+      EXPECTED_FIX_SHA: ${{ inputs.patch_sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.patch_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Record exact source revision
+        run: |
+          python - <<'PY'
+          import os, re, subprocess
+          expected = os.environ["EXPECTED_FIX_SHA"]
+          assert re.fullmatch(r"[0-9a-f]{40}", expected)
+          actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          assert actual == expected, (actual, expected)
+          print("Tested fix SHA:", actual)
+          PY
+      - name: Install CPU PyTorch and development dependencies
+        run: |
+          python -m pip install "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e '.[dev]'
+      - name: Verify runtime and editable source
+        run: |
+          python - <<'PY'
+          import os, pathlib, sys
+          import kornia, torch
+          assert torch.__version__.split("+")[0] == os.environ["TORCH_VERSION"]
+          assert torch.version.cuda is None
+          assert pathlib.Path(kornia.__file__).resolve().is_relative_to(pathlib.Path.cwd() / "kornia")
+          print(sys.version)
+          print("CPU torch:", torch.__version__)
+          print("Kornia source:", kornia.__file__)
+          PY
+      - name: Test all histogram operations across four CPU dtypes
+        run: python -m pytest tests/enhance/test_histogram.py --device=cpu --dtype=float16,bfloat16,float32,float64 -q
+      - name: Build the wheel
+        run: python -m pip wheel --no-deps . --wheel-dir dist
